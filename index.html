@@ -123,9 +123,6 @@
                 activity: 1.2,
                 apiKey: ""
             });
-            
-            // 新增控制內嵌確認面板的狀態
-            const [showMockConfirm, setShowMockConfirm] = useState(false);
 
             const handleCalculate = () => {
                 const { gender, age, height, weight, activity } = formData;
@@ -220,52 +217,6 @@
                 reader.readAsText(file);
                 // 清空 input 確保同一個檔案能重複觸發 onChange
                 e.target.value = null; 
-            };
-
-            // 產生一年份測試數據
-            const handleGenerateMockData = () => {
-                const mockFood = [];
-                const mockWeight = [];
-                const today = new Date();
-                
-                // 準備一些測試用食物
-                const foodItems = [
-                    { name: '排骨便當', cal: 850 }, { name: '拿鐵咖啡', cal: 150 },
-                    { name: '茶葉蛋', cal: 75 }, { name: '雞胸肉沙拉', cal: 350 },
-                    { name: '牛肉麵', cal: 700 }, { name: '無糖綠茶', cal: 0 },
-                    { name: '燕麥片', cal: 200 }, { name: '香蕉', cal: 90 }
-                ];
-
-                let currentWeight = 85.0; // 模擬一年前的初始體重
-                
-                // 產生過去 365 天的資料
-                for (let i = 365; i >= 0; i--) {
-                    const d = new Date(today);
-                    d.setDate(today.getDate() - i);
-                    const dateStr = d.toISOString().split('T')[0];
-
-                    // 模擬體重呈現緩慢下降趨勢，加上些微隨機波動
-                    currentWeight = currentWeight - (0.05) + (Math.random() * 0.4 - 0.2);
-                    mockWeight.push({ date: dateStr, weight: parseFloat(currentWeight.toFixed(1)) });
-
-                    // 每天隨機產生 2 到 4 筆食物紀錄
-                    const meals = Math.floor(Math.random() * 3) + 2; 
-                    for (let j = 0; j < meals; j++) {
-                        const food = foodItems[Math.floor(Math.random() * foodItems.length)];
-                        mockFood.push({
-                            id: Date.now() + i * 10 + j,
-                            date: dateStr,
-                            name: food.name,
-                            calories: food.cal,
-                            timestamp: '12:00'
-                        });
-                    }
-                }
-
-                localStorage.setItem('cl_food', JSON.stringify(mockFood));
-                localStorage.setItem('cl_weight', JSON.stringify(mockWeight));
-                alert("一年份測試數據已成功生成！畫面將重新載入。");
-                window.location.reload();
             };
 
             return (
@@ -375,44 +326,6 @@
                                 <input type="file" accept=".json" className="hidden" onChange={handleImportData} />
                             </label>
                         </div>
-                    </div>
-
-                    {/* 測試數據生成區塊 */}
-                    <div className="bg-white rounded-2xl shadow-sm p-6">
-                        <h3 className="text-lg font-bold text-gray-800 mb-2 flex items-center">
-                            <i className="fa-solid fa-flask text-purple-500 mr-2"></i> 開發者測試功能
-                        </h3>
-                        <p className="text-sm text-gray-500 mb-4">一鍵生成過去 365 天的虛擬飲食與減重數據。強烈建議在產生前，先將您真實的資料「匯出備份」！</p>
-                        
-                        {!showMockConfirm ? (
-                            <button 
-                                onClick={() => setShowMockConfirm(true)}
-                                className="w-full border-2 border-purple-500 text-purple-600 font-semibold py-2.5 rounded-xl hover:bg-purple-50 transition"
-                            >
-                                產生一年份測試數據
-                            </button>
-                        ) : (
-                            <div className="bg-red-50 p-4 rounded-xl border border-red-200 animate-fade-in">
-                                <p className="text-sm text-red-600 font-medium mb-3 flex items-start">
-                                    <i className="fa-solid fa-triangle-exclamation mt-1 mr-2"></i> 
-                                    警告：此操作將覆蓋目前的紀錄，建議確認已備份後再執行。
-                                </p>
-                                <div className="flex gap-2">
-                                    <button 
-                                        onClick={handleGenerateMockData}
-                                        className="flex-1 bg-red-500 text-white font-semibold py-2 rounded-lg hover:bg-red-600 transition"
-                                    >
-                                        確定產生
-                                    </button>
-                                    <button 
-                                        onClick={() => setShowMockConfirm(false)}
-                                        className="flex-[0.5] bg-gray-200 text-gray-700 font-semibold py-2 rounded-lg hover:bg-gray-300 transition"
-                                    >
-                                        取消
-                                    </button>
-                                </div>
-                            </div>
-                        )}
                     </div>
 
                     {profile.tdee && (
