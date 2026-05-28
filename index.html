@@ -132,11 +132,46 @@
                 let tdee = bmr * activity;
                 let target = tdee * 0.8;
 
+                // 新增 BMI 計算邏輯
+                const heightInMeter = height / 100;
+                let bmiValue = weight / (heightInMeter * heightInMeter);
+                bmiValue = (Math.round(bmiValue * 10) / 10).toFixed(1); // 取小數點後一位
+
+                let bmiColor = "text-gray-800";
+                let bmiBorder = "border-gray-400";
+                let bmiLabel = "";
+                
+                if (bmiValue < 18.5) {
+                    bmiColor = "text-blue-500";
+                    bmiBorder = "border-blue-500";
+                    bmiLabel = "過輕";
+                } else if (bmiValue >= 18.5 && bmiValue < 24) {
+                    bmiColor = "text-emerald-500";
+                    bmiBorder = "border-emerald-500";
+                    bmiLabel = "健康";
+                } else if (bmiValue >= 24 && bmiValue < 27) {
+                    bmiColor = "text-yellow-500";
+                    bmiBorder = "border-yellow-500";
+                    bmiLabel = "過重";
+                } else if (bmiValue >= 27 && bmiValue < 30) {
+                    bmiColor = "text-orange-500";
+                    bmiBorder = "border-orange-500";
+                    bmiLabel = "肥胖";
+                } else {
+                    bmiColor = "text-red-500";
+                    bmiBorder = "border-red-500";
+                    bmiLabel = "重度肥胖";
+                }
+
                 setProfile({
                     ...formData,
                     bmr: Math.round(bmr),
                     tdee: Math.round(tdee),
-                    target: Math.round(target)
+                    target: Math.round(target),
+                    bmi: bmiValue,
+                    bmiColor,
+                    bmiBorder,
+                    bmiLabel
                 });
                 
                 alert("設定已儲存！");
@@ -192,14 +227,22 @@
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">性別</label>
-                                <select 
-                                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
-                                    value={formData.gender}
-                                    onChange={(e) => setFormData({...formData, gender: parseInt(e.target.value)})}
-                                >
-                                    <option value={1}>男性</option>
-                                    <option value={0}>女性</option>
-                                </select>
+                                <div className="flex gap-2">
+                                    <button
+                                        type="button"
+                                        className={`flex-1 py-2.5 rounded-lg font-medium transition ${formData.gender === 1 ? 'bg-emerald-600 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                        onClick={() => setFormData({...formData, gender: 1})}
+                                    >
+                                        男性
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className={`flex-1 py-2.5 rounded-lg font-medium transition ${formData.gender === 0 ? 'bg-emerald-600 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                                        onClick={() => setFormData({...formData, gender: 0})}
+                                    >
+                                        女性
+                                    </button>
+                                </div>
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">年齡 (歲)</label>
@@ -233,8 +276,10 @@
                                     onChange={(e) => setFormData({...formData, activity: parseFloat(e.target.value)})}
                                 >
                                     <option value={1.2}>幾乎不運動 (久坐)</option>
-                                    <option value={1.375}>輕度運動 (每週1～3次)</option>
-                                    <option value={1.55}>中度運動 (每週3～5次)</option>
+                                    <option value={1.375}>輕度活動 (每週1～3天)</option>
+                                    <option value={1.55}>中度運動 (每週3～5天)</option>
+                                    <option value={1.725}>強度運動 (每週6～7天)</option>
+                                    <option value={1.9}>激烈活動 (長時間運動或體力勞動)</option>
                                 </select>
                             </div>
                         </div>
@@ -281,19 +326,24 @@
                     </div>
 
                     {profile.tdee && (
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div className="bg-white rounded-2xl shadow-sm p-6 text-center border-t-4 border-blue-400">
-                                <p className="text-sm text-gray-500 mb-1">基礎代謝率 (BMR)</p>
-                                <p className="text-3xl font-bold text-gray-800">{profile.bmr} <span className="text-base font-normal">kcal</span></p>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className={`bg-white rounded-2xl shadow-sm p-4 md:p-6 text-center border-t-4 ${profile.bmiBorder || 'border-gray-400'}`}>
+                                <p className="text-xs md:text-sm text-gray-500 mb-1">BMI 指數</p>
+                                <p className={`text-2xl md:text-3xl font-bold ${profile.bmiColor || 'text-gray-800'}`}>{profile.bmi}</p>
+                                <p className={`text-xs md:text-sm font-medium mt-1 ${profile.bmiColor || 'text-gray-500'}`}>{profile.bmiLabel}</p>
                             </div>
-                            <div className="bg-white rounded-2xl shadow-sm p-6 text-center border-t-4 border-yellow-400">
-                                <p className="text-sm text-gray-500 mb-1">每日總熱量消耗 (TDEE)</p>
-                                <p className="text-3xl font-bold text-gray-800">{profile.tdee} <span className="text-base font-normal">kcal</span></p>
+                            <div className="bg-white rounded-2xl shadow-sm p-4 md:p-6 text-center border-t-4 border-blue-400">
+                                <p className="text-xs md:text-sm text-gray-500 mb-1">基礎代謝率</p>
+                                <p className="text-2xl md:text-3xl font-bold text-gray-800">{profile.bmr} <span className="text-xs md:text-base font-normal">kcal</span></p>
                             </div>
-                            <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-2xl shadow-md p-6 text-center text-white relative overflow-hidden">
-                                <i className="fa-solid fa-bullseye absolute -right-4 -bottom-4 text-7xl opacity-20"></i>
-                                <p className="text-sm opacity-90 mb-1 relative z-10">減重建議目標 (TDEE × 0.8)</p>
-                                <p className="text-4xl font-bold relative z-10">{profile.target} <span className="text-base font-normal">kcal</span></p>
+                            <div className="bg-white rounded-2xl shadow-sm p-4 md:p-6 text-center border-t-4 border-yellow-400">
+                                <p className="text-xs md:text-sm text-gray-500 mb-1">總消耗 (TDEE)</p>
+                                <p className="text-2xl md:text-3xl font-bold text-gray-800">{profile.tdee} <span className="text-xs md:text-base font-normal">kcal</span></p>
+                            </div>
+                            <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-2xl shadow-md p-4 md:p-6 text-center text-white relative overflow-hidden">
+                                <i className="fa-solid fa-bullseye absolute -right-2 -bottom-2 text-5xl opacity-20"></i>
+                                <p className="text-xs md:text-sm opacity-90 mb-1 relative z-10">減重目標</p>
+                                <p className="text-2xl md:text-3xl font-bold relative z-10">{profile.target} <span className="text-xs md:text-base font-normal">kcal</span></p>
                             </div>
                         </div>
                     )}
@@ -506,7 +556,7 @@
                                 <div className="space-y-3">
                                     <input 
                                         type="text" 
-                                        placeholder="食物名稱 (例如：茶葉蛋)"
+                                        placeholder="食物名稱"
                                         className="w-full p-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                                         value={manualName}
                                         onChange={(e) => setManualName(e.target.value)}
@@ -536,7 +586,7 @@
                                     <input 
                                         type="number" step="0.1"
                                         className="flex-1 p-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-center text-lg"
-                                        placeholder="例如：65.5"
+                                        placeholder="去量體重"
                                         value={currentWeight}
                                         onChange={(e) => setCurrentWeight(e.target.value)}
                                     />
@@ -750,7 +800,7 @@
                         <div className="bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl shadow-md p-6 text-white relative overflow-hidden">
                             <i className="fa-solid fa-calendar-week absolute -right-4 -bottom-4 text-7xl opacity-20"></i>
                             <h3 className="font-bold mb-1 opacity-90 relative z-10">本週平均體重</h3>
-                            <p className="text-sm opacity-80 mb-4 relative z-10">週一至週日結算</p>
+                            <p className="text-sm opacity-80 mb-4 relative z-10">週日結算</p>
                             <div className="flex items-baseline relative z-10">
                                 <span className="text-4xl font-bold">{currentWeekAvg}</span>
                                 <span className="ml-2 text-lg opacity-80">kg</span>
