@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>CalorieLens 智能熱量管家</title>
+    
+    <!-- PWA & iOS App 設定 -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="熱量管家">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3063/3063822.png">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body { font-family: 'Inter', 'Noto Sans TC', sans-serif; background-color: #f3f4f6; }
+        .tab-active { border-bottom: 2px solid #10b981; color: #10b981; font-weight: 600; }
+        .tab-inactive { color: #6b7280; }
+        .glass-card { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2); }
+        
+        /* 隱藏原生滾動條但保持可滾動 */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // 日期格式化工具 (YYYY-MM-DD)
+        const getTodayStr = () => {
+            const tzoffset = (new Date()).getTimezoneOffset() * 60000;
+            return (new Date(Date.now() - tzoffset)).toISOString().split('T')[0];
+        };
+
+        // 呼叫 Gemini API 估算熱量
+        const estimateCaloriesAPI = async (text, base64Image, customApiKey) => {
+            const apiKey = customApiKey || ""; 
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+            
+            const payload = {
+                contents: [{ role: "user", parts: [] }],
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            foodName: { type: "STRING", description: "食物的名稱，使用繁體中文" },
+                            calories: { type: "NUMBER", description: "估算的熱量(大卡)，請給予合理的整數" }
+                        },
+                        required: ["foodName", "calories"]
+                    }
+                },
+                systemInstruction: {
+                    parts: [{ text: "你是一位專業的營養師。請根據用戶提供的文字描述或圖片，辨識食物並估算其總熱量(大卡)。即使不確定，也請給出一個最合理的估計值。" }]
+                }
+            };
+
+            if (text) {
+                payload.contents[0].parts.push({ text: `請估算這份食物的熱量：${text}` });
+            }
+            
+            if (base64Image) {
+                const base64Data = base64Image.split(',')[1];
+                const mimeType = base64Image.split(';')[0].split(':')[1];
+                payload.contents[0].parts.push({
+                    inlineData: { mimeType: mimeType, data: base64Data }
+                });
+                if (!text) {
+                    payload.contents[0].parts.push({ text: "請辨識圖片中的食物並估算熱量。" });
+                }
+            }
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                
+                // 檢查是否收到 API 端的錯誤回報
+                if (!response.ok) {
+                    throw new Error(result.error?.message || `伺服器回應錯誤碼：${response.status}`);
+                }
+                
+                if (result.candidates && result.candidates[0].content.parts[0].text) {
+                    let jsonText = result.candidates[0].content.parts[0].text;
+                    // 清理可能干擾解析的 Markdown 標籤
+                    jsonText = jsonText.replace(/```json/gi, '').replace(/```/g, '').trim();
+                    return JSON.parse(jsonText);
+                }
+                throw new Error("無法解析 AI 回應：格式不符");
+            } catch (error) {
+                console.error("API Error:", error);
+                throw error;
+            }
+        };
+
+        const ProfileTab = ({ profile, setProfile }) => {
+            const [formData, setFormData] = useState(profile || {
+                gender: 1, // 1: 男, 0: 女
+                age: 25,
+                height: 170,
+                weight: 65,
+                activity: 1.2,
+                apiKey: ""
+            });
+
+            const handleCalculate = () => {
+                const { gender, age, height, weight, activity } = formData;
+                // 使用 Mifflin-St Jeor 公式
+                let bmr = (10 * weight) + (6.25 * height) - (5 * age);
+                // 根據性別加上常數 (男: +5, 女: -161)
+                bmr = gender === 1 ? bmr + 5 : bmr - 161;
+                
+                let tdee = bmr * activity;
+                let target = tdee * 0.8;
+
+                setProfile({
+                    ...formData,
+                    bmr: Math.round(bmr),
+                    tdee: Math.round(tdee),
+                    target: Math.round(target)
+                });
+                
+                alert("設定已儲存！");
+            };
+
+            const handleResetData = () => {
+                if (window.confirm("確定要刪除所有飲食與體重紀錄嗎？這將清空所有過去的歷史資料。")) {
+                    localStorage.removeItem('cl_food');
+                    localStorage.removeItem('cl_weight');
+                    window.location.reload();
+                }
+            };
+
+            return (
+                <div className="space-y-6 animate-fade-in">
+                    <div className="bg-white rounded-2xl shadow-sm p-6">
+                        <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                            <i className="fa-solid fa-calculator text-emerald-500 mr-2"></i> TDEE & 減重目標設定
+                        </h2>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">性別</label>
+                                <select 
+                                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                                    value={formData.gender}
+                                    onChange={(e) => setFormData({...formData, gender: parseInt(e.target.value)})}
+                                >
+                                    <option value={1}>男性</option>
+                                    <option value={0}>女性</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">年齡 (歲)</label>
+                                <input type="number" 
+                                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                                    value={formData.age}
+                                    onChange={(e) => setFormData({...formData, age: parseInt(e.target.value) || 0})}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">身高 (公分)</label>
+                                <input type="number" 
+                                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                                    value={formData.height}
+                                    onChange={(e) => setFormData({...formData, height: parseInt(e.target.value) || 0})}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">體重 (公斤)</label>
+                                <input type="number" step="0.1"
+                                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                                    value={formData.weight}
+                                    onChange={(e) => setFormData({...formData, weight: parseFloat(e.target.value) || 0})}
+                                />
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="block text-sm font-medium text-gray-700 mb-1">活動程度</label>
+                                <select 
+                                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                                    value={formData.activity}
+                                    onChange={(e) => setFormData({...formData, activity: parseFloat(e.target.value)})}
+                                >
+                                    <option value={1.2}>幾乎不運動 (久坐)</option>
+                                    <option value={1.375}>輕度運動 (每週1～3次)</option>
+                                    <option value={1.55}>中度運動 (每週3～5次)</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div className="mt-4 pt-4 border-t border-gray-100">
+                            <label className="block text-sm font-medium text-gray-700 mb-1 flex justify-between">
+                                <span>Gemini API 金鑰 (選填)</span>
+                                <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-emerald-500 hover:underline text-xs">免費取得金鑰 <i className="fa-solid fa-arrow-up-right-from-square"></i></a>
+                            </label>
+                            <p className="text-xs text-gray-500 mb-2">若要將此工具安裝於手機獨立使用，請填寫您的專屬 API 金鑰以啟用 AI 辨識功能。</p>
+                            <input type="password" 
+                                className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm"
+                                placeholder="AIzaSy..."
+                                value={formData.apiKey || ""}
+                                onChange={(e) => setFormData({...formData, apiKey: e.target.value})}
+                            />
+                        </div>
+
+                        <button 
+                            onClick={handleCalculate}
+                            className="mt-6 w-full bg-emerald-600 text-white font-semibold py-3 rounded-xl hover:bg-emerald-700 transition shadow-md"
+                        >
+                            計算我的數據
+                        </button>
+                    </div>
+
+                    <div className="bg-white rounded-2xl shadow-sm p-6">
+                        <h3 className="text-lg font-bold text-gray-800 mb-2 flex items-center">
+                            <i className="fa-solid fa-rotate-right text-red-500 mr-2"></i> 系統重置
+                        </h3>
+                        <p className="text-sm text-gray-500 mb-4">點擊下方按鈕可清除所有測試資料，讓您開始記錄真實數據。</p>
+                        <button 
+                            onClick={handleResetData}
+                            className="w-full border-2 border-red-500 text-red-500 font-semibold py-2.5 rounded-xl hover:bg-red-50 transition"
+                        >
+                            清除所有紀錄 (重新開始)
+                        </button>
+                    </div>
+
+                    {profile.tdee && (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="bg-white rounded-2xl shadow-sm p-6 text-center border-t-4 border-blue-400">
+                                <p className="text-sm text-gray-500 mb-1">基礎代謝率 (BMR)</p>
+                                <p className="text-3xl font-bold text-gray-800">{profile.bmr} <span className="text-base font-normal">kcal</span></p>
+                            </div>
+                            <div className="bg-white rounded-2xl shadow-sm p-6 text-center border-t-4 border-yellow-400">
+                                <p className="text-sm text-gray-500 mb-1">每日總熱量消耗 (TDEE)</p>
+                                <p className="text-3xl font-bold text-gray-800">{profile.tdee} <span className="text-base font-normal">kcal</span></p>
+                            </div>
+                            <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-2xl shadow-md p-6 text-center text-white relative overflow-hidden">
+                                <i className="fa-solid fa-bullseye absolute -right-4 -bottom-4 text-7xl opacity-20"></i>
+                                <p className="text-sm opacity-90 mb-1 relative z-10">減重建議目標 (TDEE × 0.8)</p>
+                                <p className="text-4xl font-bold relative z-10">{profile.target} <span className="text-base font-normal">kcal</span></p>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const DiaryTab = ({ profile, foodLogs, setFoodLogs, weightLogs, setWeightLogs }) => {
+            const [selectedDate, setSelectedDate] = useState(getTodayStr());
+            const [inputText, setInputText] = useState("");
+            const [imageFile, setImageFile] = useState(null);
+            const [imagePreview, setImagePreview] = useState(null);
+            const [isAnalyzing, setIsAnalyzing] = useState(false);
+            const [currentWeight, setCurrentWeight] = useState("");
+            
+            // 新增手動輸入狀態
+            const [manualName, setManualName] = useState("");
+            const [manualCalories, setManualCalories] = useState("");
+            
+            const fileInputRef = useRef(null);
+
+            // 當日熱量計算
+            const currentDateLogs = foodLogs.filter(log => log.date === selectedDate);
+            const currentDateCalories = currentDateLogs.reduce((sum, log) => sum + log.calories, 0);
+            const target = profile.target || 2000;
+            const percentage = Math.min((currentDateCalories / target) * 100, 100);
+            const isExceeded = currentDateCalories > target;
+
+            // 讀取選定日期的體重
+            useEffect(() => {
+                const wLog = weightLogs.find(w => w.date === selectedDate);
+                if (wLog) setCurrentWeight(wLog.weight);
+                else setCurrentWeight("");
+            }, [weightLogs, selectedDate]);
+
+            const handleImageChange = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    setImageFile(file);
+                    const reader = new FileReader();
+                    reader.onloadend = () => { setImagePreview(reader.result); };
+                    reader.readAsDataURL(file);
+                }
+            };
+
+            const handleAnalyze = async () => {
+                if (!inputText && !imagePreview) return;
+                
+                if (!profile.apiKey && window.location.hostname !== "googleusercontent.com") {
+                    alert("請先至「個人設定」頁面輸入您的 Gemini API 金鑰。");
+                    return;
+                }
+
+                setIsAnalyzing(true);
+                try {
+                    const result = await estimateCaloriesAPI(inputText, imagePreview, profile.apiKey);
+                    
+                    const newLog = {
+                        id: Date.now(),
+                        date: selectedDate,
+                        name: result.foodName,
+                        calories: result.calories,
+                        timestamp: new Date().toLocaleTimeString('zh-TW', {hour: '2-digit', minute:'2-digit'})
+                    };
+                    
+                    setFoodLogs([newLog, ...foodLogs]);
+                    setInputText("");
+                    setImageFile(null);
+                    setImagePreview(null);
+                    if(fileInputRef.current) fileInputRef.current.value = "";
+
+                } catch (err) {
+                    // 將詳細錯誤訊息顯示出來
+                    alert(`分析失敗：${err.message}`);
+                } finally {
+                    setIsAnalyzing(false);
+                }
+            };
+
+            // 新增手動處理函數
+            const handleManualAdd = () => {
+                if (!manualName.trim() || !manualCalories) {
+                    alert("請填寫食物名稱與熱量！");
+                    return;
+                }
+                const cals = parseInt(manualCalories);
+                if (isNaN(cals) || cals < 0) {
+                    alert("請輸入有效的熱量數值！");
+                    return;
+                }
+
+                const newLog = {
+                    id: Date.now(),
+                    date: selectedDate,
+                    name: manualName.trim(),
+                    calories: cals,
+                    timestamp: new Date().toLocaleTimeString('zh-TW', {hour: '2-digit', minute:'2-digit'})
+                };
+                
+                setFoodLogs([newLog, ...foodLogs]);
+                setManualName("");
+                setManualCalories("");
+            };
+
+            const handleDeleteLog = (id) => {
+                setFoodLogs(foodLogs.filter(log => log.id !== id));
+            };
+
+            const handleWeightSave = () => {
+                const w = parseFloat(currentWeight);
+                if (!isNaN(w)) {
+                    const newLogs = weightLogs.filter(log => log.date !== selectedDate);
+                    setWeightLogs([...newLogs, { date: selectedDate, weight: w }]);
+                }
+            };
+
+            return (
+                <div className="space-y-6 animate-fade-in pb-20">
+                    {/* 單日概況 */}
+                    <div className="bg-white rounded-2xl shadow-sm p-6">
+                        <div className="flex justify-between items-end mb-2">
+                            <div>
+                                <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2 mb-1">
+                                    <i className="fa-regular fa-calendar text-emerald-500"></i>
+                                    <input 
+                                        type="date" 
+                                        value={selectedDate}
+                                        max={getTodayStr()}
+                                        onChange={(e) => setSelectedDate(e.target.value)}
+                                        className="border-b-2 border-emerald-500 focus:outline-none bg-transparent cursor-pointer"
+                                    />
+                                </h2>
+                                <p className="text-sm text-gray-500">當日熱量攝取</p>
+                            </div>
+                            <div className="text-right">
+                                <span className={`text-3xl font-bold ${isExceeded ? 'text-red-500' : 'text-emerald-600'}`}>
+                                    {currentDateCalories}
+                                </span>
+                                <span className="text-gray-500"> / {target} kcal</span>
+                            </div>
+                        </div>
+                        
+                        <div className="w-full bg-gray-200 rounded-full h-3 mb-2">
+                            <div className={`h-3 rounded-full transition-all duration-500 ${isExceeded ? 'bg-red-500' : 'bg-emerald-500'}`} 
+                                 style={{ width: `${percentage}%` }}></div>
+                        </div>
+                        
+                        {isExceeded && (
+                            <p className="text-sm text-red-500 font-medium mt-2 flex items-center">
+                                <i className="fa-solid fa-triangle-exclamation mr-1"></i> 警示：已超過減重建議門檻！
+                            </p>
+                        )}
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        {/* 左側：AI輸入區與體重 */}
+                        <div className="space-y-6">
+                            {/* AI 估算區 */}
+                            <div className="bg-white rounded-2xl shadow-sm p-6">
+                                <h3 className="font-bold text-gray-800 mb-4"><i className="fa-solid fa-wand-magic-sparkles text-purple-500 mr-2"></i>AI 智能熱量估算</h3>
+                                
+                                <textarea 
+                                    className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none resize-none mb-3"
+                                    rows="3"
+                                    placeholder="描述您吃了什麼？(例如：一個排骨便當加一杯無糖綠茶)"
+                                    value={inputText}
+                                    onChange={(e) => setInputText(e.target.value)}
+                                ></textarea>
+
+                                {imagePreview && (
+                                    <div className="relative mb-3">
+                                        <img src={imagePreview} alt="預覽" className="w-full h-40 object-cover rounded-xl" />
+                                        <button 
+                                            onClick={() => {setImagePreview(null); setImageFile(null); if(fileInputRef.current) fileInputRef.current.value="";}}
+                                            className="absolute top-2 right-2 bg-black bg-opacity-50 text-white rounded-full w-8 h-8 flex items-center justify-center hover:bg-opacity-70"
+                                        >
+                                            <i className="fa-solid fa-times"></i>
+                                        </button>
+                                    </div>
+                                )}
+
+                                <div className="flex gap-2">
+                                    <button 
+                                        onClick={() => fileInputRef.current.click()}
+                                        className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-xl hover:bg-gray-50 transition flex items-center justify-center"
+                                    >
+                                        <i className="fa-solid fa-camera mr-2"></i> 拍照/上傳
+                                    </button>
+                                    <input 
+                                        type="file" 
+                                        accept="image/*" 
+                                        className="hidden" 
+                                        ref={fileInputRef}
+                                        onChange={handleImageChange}
+                                    />
+                                    <button 
+                                        onClick={handleAnalyze}
+                                        disabled={isAnalyzing || (!inputText && !imagePreview)}
+                                        className={`flex-[2] py-2.5 rounded-xl text-white font-semibold flex items-center justify-center transition shadow-sm
+                                            ${(isAnalyzing || (!inputText && !imagePreview)) ? 'bg-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600'}`}
+                                    >
+                                        {isAnalyzing ? <i className="fa-solid fa-circle-notch fa-spin"></i> : 'AI 分析並紀錄'}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* 手動輸入區 */}
+                            <div className="bg-white rounded-2xl shadow-sm p-6">
+                                <h3 className="font-bold text-gray-800 mb-4"><i className="fa-solid fa-pen-to-square text-orange-500 mr-2"></i>手動輸入紀錄</h3>
+                                <div className="space-y-3">
+                                    <input 
+                                        type="text" 
+                                        placeholder="食物名稱 (例如：茶葉蛋)"
+                                        className="w-full p-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+                                        value={manualName}
+                                        onChange={(e) => setManualName(e.target.value)}
+                                    />
+                                    <div className="flex gap-2">
+                                        <input 
+                                            type="number" 
+                                            placeholder="熱量 (kcal)"
+                                            className="flex-[2] p-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+                                            value={manualCalories}
+                                            onChange={(e) => setManualCalories(e.target.value)}
+                                        />
+                                        <button 
+                                            onClick={handleManualAdd}
+                                            className="flex-[1] bg-orange-500 text-white font-semibold rounded-xl hover:bg-orange-600 transition flex items-center justify-center"
+                                        >
+                                            新增
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* 體重紀錄區 */}
+                            <div className="bg-white rounded-2xl shadow-sm p-6">
+                                <h3 className="font-bold text-gray-800 mb-4"><i className="fa-solid fa-weight-scale text-blue-500 mr-2"></i>體重紀錄 (kg)</h3>
+                                <div className="flex gap-3">
+                                    <input 
+                                        type="number" step="0.1"
+                                        className="flex-1 p-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-center text-lg"
+                                        placeholder="例如：65.5"
+                                        value={currentWeight}
+                                        onChange={(e) => setCurrentWeight(e.target.value)}
+                                    />
+                                    <button 
+                                        onClick={handleWeightSave}
+                                        className="bg-blue-500 text-white px-5 rounded-xl hover:bg-blue-600 transition font-medium"
+                                    >
+                                        儲存
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 右側：飲食清單 */}
+                        <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm p-6 flex flex-col max-h-[600px]">
+                            <h3 className="font-bold text-gray-800 mb-4 border-b pb-2">飲食明細</h3>
+                            
+                            <div className="flex-1 overflow-y-auto pr-2 space-y-3">
+                                {currentDateLogs.length === 0 ? (
+                                    <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                                        <i className="fa-solid fa-utensils text-4xl mb-3 opacity-50"></i>
+                                        <p>該日尚無紀錄，趕快輸入吧！</p>
+                                    </div>
+                                ) : (
+                                    currentDateLogs.map(log => (
+                                        <div key={log.id} className="flex justify-between items-center p-4 bg-gray-50 rounded-xl border border-gray-100">
+                                            <div className="flex flex-col">
+                                                <span className="font-medium text-gray-800">{log.name}</span>
+                                                <span className="text-xs text-gray-400"><i className="fa-regular fa-clock"></i> {log.timestamp || '已紀錄'}</span>
+                                            </div>
+                                            <div className="flex items-center gap-4">
+                                                <span className="font-bold text-emerald-600">{log.calories} kcal</span>
+                                                <button onClick={() => handleDeleteLog(log.id)} className="text-red-400 hover:text-red-600 transition p-2">
+                                                    <i className="fa-solid fa-trash-can"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ReportsTab = ({ foodLogs, weightLogs, profile }) => {
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            // 取得近7天的日期字串
+            const getLast7Days = () => {
+                const dates = [];
+                for (let i = 6; i >= 0; i--) {
+                    const d = new Date();
+                    d.setDate(d.getDate() - i);
+                    dates.push(d.toISOString().split('T')[0]);
+                }
+                return dates;
+            };
+
+            const labels = getLast7Days();
+            
+            // 計算近7天熱量
+            const weeklyCalories = labels.map(date => {
+                return foodLogs
+                    .filter(log => log.date === date)
+                    .reduce((sum, log) => sum + log.calories, 0);
+            });
+
+            // 計算當週平均體重
+            const currentWeekWeights = labels.map(date => {
+                const log = weightLogs.find(w => w.date === date);
+                return log ? log.weight : null;
+            }).filter(w => w !== null);
+            
+            const avgWeight = currentWeekWeights.length > 0 
+                ? (currentWeekWeights.reduce((a, b) => a + b, 0) / currentWeekWeights.length).toFixed(1) 
+                : '--';
+
+            // 月底回顧：比較本月最新體重與上個月底
+            const currentMonthStr = getTodayStr().substring(0, 7); // YYYY-MM
+            let monthStartWeight = '--';
+            let latestWeight = '--';
+            let weightDiff = null;
+
+            if (weightLogs.length > 0) {
+                // 排序紀錄
+                const sortedWeights = [...weightLogs].sort((a, b) => new Date(a.date) - new Date(b.date));
+                latestWeight = sortedWeights[sortedWeights.length - 1].weight;
+                
+                // 找尋上個月或本月最早的紀錄作為基準
+                const thisMonthLogs = sortedWeights.filter(log => log.date.startsWith(currentMonthStr));
+                if (thisMonthLogs.length > 0) {
+                     monthStartWeight = thisMonthLogs[0].weight;
+                     weightDiff = (latestWeight - monthStartWeight).toFixed(1);
+                }
+            }
+
+            useEffect(() => {
+                if (chartInstance.current) {
+                    chartInstance.current.destroy();
+                }
+
+                const ctx = chartRef.current.getContext('2d');
+                
+                chartInstance.current = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels.map(d => d.substring(5)), // 顯示 MM-DD
+                        datasets: [
+                            {
+                                label: '每日熱量 (kcal)',
+                                data: weeklyCalories,
+                                borderColor: '#10b981',
+                                backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                                tension: 0.4,
+                                fill: true,
+                                pointBackgroundColor: '#10b981',
+                                pointBorderColor: '#fff',
+                                pointHoverBackgroundColor: '#fff',
+                                pointHoverBorderColor: '#10b981',
+                            },
+                            {
+                                label: '目標門檻',
+                                data: Array(7).fill(profile.target || 2000),
+                                borderColor: '#ef4444',
+                                borderDash: [5, 5],
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                fill: false,
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { position: 'top', labels: { usePointStyle: true } },
+                            tooltip: { mode: 'index', intersect: false }
+                        },
+                        scales: {
+                            y: { beginAtZero: true, suggestedMax: (profile.target || 2000) * 1.5 },
+                            x: { grid: { display: false } }
+                        }
+                    }
+                });
+
+                return () => {
+                    if (chartInstance.current) chartInstance.current.destroy();
+                };
+            }, [foodLogs, profile.target]);
+
+            return (
+                <div className="space-y-6 animate-fade-in pb-20">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* 週報告卡片 */}
+                        <div className="bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl shadow-md p-6 text-white relative overflow-hidden">
+                            <i className="fa-solid fa-calendar-week absolute -right-4 -bottom-4 text-7xl opacity-20"></i>
+                            <h3 className="font-bold mb-1 opacity-90 relative z-10">當週回顧 (近7日)</h3>
+                            <p className="text-sm opacity-80 mb-4 relative z-10">平均體重</p>
+                            <div className="flex items-baseline relative z-10">
+                                <span className="text-4xl font-bold">{avgWeight}</span>
+                                <span className="ml-2 text-lg opacity-80">kg</span>
+                            </div>
+                            <p className="mt-4 text-sm bg-black bg-opacity-20 inline-block px-3 py-1 rounded-full relative z-10">
+                                紀錄天數: {currentWeekWeights.length} 天
+                            </p>
+                        </div>
+
+                        {/* 月報告卡片 */}
+                        <div className="bg-gradient-to-br from-purple-500 to-pink-500 rounded-2xl shadow-md p-6 text-white relative overflow-hidden">
+                            <i className="fa-solid fa-calendar-days absolute -right-4 -bottom-4 text-7xl opacity-20"></i>
+                            <h3 className="font-bold mb-1 opacity-90 relative z-10">本月體重變化</h3>
+                            <p className="text-sm opacity-80 mb-4 relative z-10">最新體重 vs 月初基準</p>
+                            
+                            <div className="flex justify-between items-center relative z-10">
+                                <div>
+                                    <span className="text-3xl font-bold">{latestWeight}</span> <span className="text-sm">kg</span>
+                                </div>
+                                <div className="h-8 border-l border-white opacity-30"></div>
+                                <div>
+                                    {weightDiff > 0 ? (
+                                        <span className="text-2xl font-bold text-red-200"><i className="fa-solid fa-arrow-trend-up"></i> +{weightDiff}</span>
+                                    ) : weightDiff < 0 ? (
+                                        <span className="text-2xl font-bold text-green-200"><i className="fa-solid fa-arrow-trend-down"></i> {weightDiff}</span>
+                                    ) : (
+                                        <span className="text-2xl font-bold text-gray-200">持平</span>
+                                    )}
+                                </div>
+                            </div>
+                            <p className="mt-4 text-sm bg-black bg-opacity-20 inline-block px-3 py-1 rounded-full relative z-10">
+                                每月1日請記得測量作為基準！
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* 熱量折線圖 */}
+                    <div className="bg-white rounded-2xl shadow-sm p-6">
+                        <h3 className="font-bold text-gray-800 mb-6"><i className="fa-solid fa-chart-line text-emerald-500 mr-2"></i>當週熱量攝取變化</h3>
+                        <div className="relative h-72 w-full">
+                            <canvas ref={chartRef}></canvas>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [activeTab, setActiveTab] = useState('diary');
+            const [profile, setProfile] = useState({});
+            const [foodLogs, setFoodLogs] = useState([]);
+            const [weightLogs, setWeightLogs] = useState([]);
+            const [isLoaded, setIsLoaded] = useState(false);
+
+            // 初始化與讀取 LocalStorage
+            useEffect(() => {
+                const savedProfile = localStorage.getItem('cl_profile');
+                const savedFood = localStorage.getItem('cl_food');
+                const savedWeight = localStorage.getItem('cl_weight');
+
+                let initialProfile = {};
+                if (savedProfile) {
+                    initialProfile = JSON.parse(savedProfile);
+                    setProfile(initialProfile);
+                } else {
+                    // 若無設定，預設跳至設定頁
+                    setActiveTab('profile');
+                }
+
+                if (savedFood) setFoodLogs(JSON.parse(savedFood));
+                if (savedWeight) setWeightLogs(JSON.parse(savedWeight));
+
+                setIsLoaded(true);
+            }, []);
+
+            // 資料變更時自動儲存
+            useEffect(() => {
+                if(isLoaded) localStorage.setItem('cl_profile', JSON.stringify(profile));
+            }, [profile, isLoaded]);
+
+            useEffect(() => {
+                if(isLoaded) localStorage.setItem('cl_food', JSON.stringify(foodLogs));
+            }, [foodLogs, isLoaded]);
+
+            useEffect(() => {
+                if(isLoaded) localStorage.setItem('cl_weight', JSON.stringify(weightLogs));
+            }, [weightLogs, isLoaded]);
+
+            if (!isLoaded) return <div className="min-h-screen flex items-center justify-center text-emerald-600"><i className="fa-solid fa-spinner fa-spin text-4xl"></i></div>;
+
+            return (
+                <div className="min-h-screen pb-16 md:pb-0">
+                    {/* Header */}
+                    <header className="bg-emerald-600 text-white sticky top-0 z-50 shadow-md">
+                        <div className="max-w-4xl mx-auto px-4 py-4 flex justify-between items-center">
+                            <h1 className="text-xl font-bold flex items-center tracking-wide">
+                                <i className="fa-solid fa-leaf mr-2 text-emerald-200"></i> CalorieLens
+                            </h1>
+                            {profile.target && (
+                                <div className="text-sm bg-emerald-700 px-3 py-1 rounded-full">
+                                    目標: {profile.target} kcal
+                                </div>
+                            )}
+                        </div>
+                    </header>
+
+                    {/* Main Content */}
+                    <main className="max-w-4xl mx-auto px-4 py-6">
+                        {activeTab === 'profile' && <ProfileTab profile={profile} setProfile={setProfile} />}
+                        {activeTab === 'diary' && <DiaryTab profile={profile} foodLogs={foodLogs} setFoodLogs={setFoodLogs} weightLogs={weightLogs} setWeightLogs={setWeightLogs} />}
+                        {activeTab === 'reports' && <ReportsTab foodLogs={foodLogs} weightLogs={weightLogs} profile={profile} />}
+                    </main>
+
+                    {/* Bottom Navigation (Mobile) & Top Tabs (Desktop) */}
+                    <nav className="fixed bottom-0 w-full bg-white border-t border-gray-200 md:relative md:border-t-0 md:bg-transparent md:max-w-4xl md:mx-auto md:-mt-4 md:mb-6 md:px-4 z-40">
+                        <div className="flex justify-around md:justify-start md:space-x-8 md:bg-white md:p-2 md:rounded-2xl md:shadow-sm">
+                            <button 
+                                onClick={() => setActiveTab('diary')}
+                                className={`flex-1 py-3 md:py-2 md:px-6 flex flex-col md:flex-row items-center justify-center gap-1 md:gap-2 md:rounded-xl transition ${activeTab === 'diary' ? 'text-emerald-600 md:bg-emerald-50' : 'text-gray-400 hover:text-emerald-500'}`}
+                            >
+                                <i className="fa-solid fa-book-open text-xl md:text-base"></i>
+                                <span className="text-xs md:text-sm font-medium">每日紀錄</span>
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('reports')}
+                                className={`flex-1 py-3 md:py-2 md:px-6 flex flex-col md:flex-row items-center justify-center gap-1 md:gap-2 md:rounded-xl transition ${activeTab === 'reports' ? 'text-emerald-600 md:bg-emerald-50' : 'text-gray-400 hover:text-emerald-500'}`}
+                            >
+                                <i className="fa-solid fa-chart-pie text-xl md:text-base"></i>
+                                <span className="text-xs md:text-sm font-medium">數據回顧</span>
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('profile')}
+                                className={`flex-1 py-3 md:py-2 md:px-6 flex flex-col md:flex-row items-center justify-center gap-1 md:gap-2 md:rounded-xl transition ${activeTab === 'profile' ? 'text-emerald-600 md:bg-emerald-50' : 'text-gray-400 hover:text-emerald-500'}`}
+                            >
+                                <i className="fa-solid fa-user-gear text-xl md:text-base"></i>
+                                <span className="text-xs md:text-sm font-medium">個人設定</span>
+                            </button>
+                        </div>
+                    </nav>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
