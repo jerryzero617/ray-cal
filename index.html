@@ -792,7 +792,7 @@
             sortedMondays.forEach(monday => {
                 const weights = weeklyWeightsMap[monday];
                 const avg = (weights.reduce((a, b) => a + b, 0) / weights.length).toFixed(1);
-                weightTrendLabels.push(`週一: ${monday.substring(5)}`);
+                weightTrendLabels.push(` ${monday.substring(5)}`);
                 weightTrendData.push(parseFloat(avg));
             });
 
