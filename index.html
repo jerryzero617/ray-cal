@@ -15,8 +15,10 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Chart.js -->
+    <!-- Chart.js 與圖表拖曳平移套件 -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1"></script>
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -792,7 +794,7 @@
             sortedMondays.forEach(monday => {
                 const weights = weeklyWeightsMap[monday];
                 const avg = (weights.reduce((a, b) => a + b, 0) / weights.length).toFixed(1);
-                weightTrendLabels.push(` ${monday.substring(5)}`);
+                weightTrendLabels.push(`${monday.substring(5)}`);
                 weightTrendData.push(parseFloat(avg));
             });
 
@@ -830,6 +832,7 @@
                 if (weightChartInstance.current) weightChartInstance.current.destroy();
 
                 const ctx = chartRef.current.getContext('2d');
+                const calLen = labels.length;
                 
                 chartInstance.current = new Chart(ctx, {
                     type: 'line',
@@ -862,13 +865,29 @@
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: { legend: { position: 'top', labels: { usePointStyle: true } }, tooltip: { mode: 'index', intersect: false } },
-                        scales: { y: { beginAtZero: true, suggestedMax: (profile.target || 2000) * 1.5 }, x: { grid: { display: false } } }
+                        plugins: { 
+                            legend: { position: 'top', labels: { usePointStyle: true } }, 
+                            tooltip: { mode: 'index', intersect: false },
+                            zoom: {
+                                pan: { enabled: true, mode: 'x' },
+                                zoom: { wheel: { enabled: false }, pinch: { enabled: false } }
+                            }
+                        },
+                        scales: { 
+                            y: { beginAtZero: true, suggestedMax: (profile.target || 2000) * 1.5 }, 
+                            x: { 
+                                grid: { display: false },
+                                min: Math.max(0, calLen - 7), // 預設顯示最新的 7 天
+                                max: calLen > 0 ? calLen - 1 : 0
+                            } 
+                        }
                     }
                 });
 
                 if (weightChartRef.current) {
                     const ctxWeight = weightChartRef.current.getContext('2d');
+                    const weightLen = weightTrendLabels.length;
+                    
                     weightChartInstance.current = new Chart(ctxWeight, {
                         type: 'line',
                         data: {
@@ -887,10 +906,21 @@
                         options: {
                             responsive: true,
                             maintainAspectRatio: false,
-                            plugins: { legend: { position: 'top', labels: { usePointStyle: true } }, tooltip: { mode: 'index', intersect: false } },
+                            plugins: { 
+                                legend: { position: 'top', labels: { usePointStyle: true } }, 
+                                tooltip: { mode: 'index', intersect: false },
+                                zoom: {
+                                    pan: { enabled: true, mode: 'x' },
+                                    zoom: { wheel: { enabled: false }, pinch: { enabled: false } }
+                                }
+                            },
                             scales: { 
                                 y: { beginAtZero: false, grace: '5%' }, 
-                                x: { grid: { display: false } } 
+                                x: { 
+                                    grid: { display: false },
+                                    min: Math.max(0, weightLen - 12), // 預設顯示最新的 12 週
+                                    max: weightLen > 0 ? weightLen - 1 : 0
+                                } 
                             }
                         }
                     });
@@ -949,20 +979,16 @@
                     {/* 歷週平均體重折線圖 */}
                     <div className="bg-white rounded-2xl shadow-sm p-6">
                         <h3 className="font-bold text-gray-800 mb-6"><i className="fa-solid fa-weight-scale text-blue-500 mr-2"></i>近一年歷週平均體重變化</h3>
-                        <div className="overflow-x-auto pb-2">
-                            <div style={{ minWidth: '100%', width: `${Math.max(100, weightTrendLabels.length * 60)}px`, height: '288px' }} className="relative">
-                                <canvas ref={weightChartRef}></canvas>
-                            </div>
+                        <div className="relative h-72 w-full">
+                            <canvas ref={weightChartRef}></canvas>
                         </div>
                     </div>
 
                     {/* 熱量折線圖 */}
                     <div className="bg-white rounded-2xl shadow-sm p-6">
                         <h3 className="font-bold text-gray-800 mb-6"><i className="fa-solid fa-chart-line text-emerald-500 mr-2"></i>近30天熱量攝取變化</h3>
-                        <div className="overflow-x-auto pb-2">
-                            <div style={{ minWidth: '100%', width: `${Math.max(100, labels.length * 40)}px`, height: '288px' }} className="relative">
-                                <canvas ref={chartRef}></canvas>
-                            </div>
+                        <div className="relative h-72 w-full">
+                            <canvas ref={chartRef}></canvas>
                         </div>
                     </div>
                 </div>
