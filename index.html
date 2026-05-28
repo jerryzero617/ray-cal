@@ -50,6 +50,7 @@
         // 呼叫 Gemini API 估算熱量
         const estimateCaloriesAPI = async (text, base64Image, customApiKey) => {
             const apiKey = customApiKey || ""; 
+            // 將模型名稱改回具備穩定免費額度的 gemini-2.5-flash
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
             
             const payload = {
@@ -141,12 +142,44 @@
                 alert("設定已儲存！");
             };
 
-            const handleResetData = () => {
-                if (window.confirm("確定要刪除所有飲食與體重紀錄嗎？這將清空所有過去的歷史資料。")) {
-                    localStorage.removeItem('cl_food');
-                    localStorage.removeItem('cl_weight');
-                    window.location.reload();
-                }
+            // 實作匯出備份資料
+            const handleExportData = () => {
+                const data = {
+                    profile: localStorage.getItem('cl_profile'),
+                    food: localStorage.getItem('cl_food'),
+                    weight: localStorage.getItem('cl_weight')
+                };
+                const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `CalorieLens_Backup_${getTodayStr()}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+
+            // 實作匯入備份資料
+            const handleImportData = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        if (data.profile) localStorage.setItem('cl_profile', data.profile);
+                        if (data.food) localStorage.setItem('cl_food', data.food);
+                        if (data.weight) localStorage.setItem('cl_weight', data.weight);
+                        
+                        alert("資料已成功還原！畫面將重新載入以套用最新數據。");
+                        window.location.reload();
+                    } catch (error) {
+                        alert("備份檔案格式錯誤，請確認上傳了正確的檔案。");
+                    }
+                };
+                reader.readAsText(file);
+                // 清空 input 確保同一個檔案能重複觸發 onChange
+                e.target.value = null; 
             };
 
             return (
@@ -230,15 +263,21 @@
 
                     <div className="bg-white rounded-2xl shadow-sm p-6">
                         <h3 className="text-lg font-bold text-gray-800 mb-2 flex items-center">
-                            <i className="fa-solid fa-rotate-right text-red-500 mr-2"></i> 系統重置
+                            <i className="fa-solid fa-cloud-arrow-down text-blue-500 mr-2"></i> 資料備份與還原
                         </h3>
-                        <p className="text-sm text-gray-500 mb-4">點擊下方按鈕可清除所有測試資料，讓您開始記錄真實數據。</p>
-                        <button 
-                            onClick={handleResetData}
-                            className="w-full border-2 border-red-500 text-red-500 font-semibold py-2.5 rounded-xl hover:bg-red-50 transition"
-                        >
-                            清除所有紀錄 (重新開始)
-                        </button>
+                        <p className="text-sm text-gray-500 mb-4">將您的飲食與體重紀錄下載至設備中，或從先前的備份檔還原資料。</p>
+                        <div className="flex gap-3">
+                            <button 
+                                onClick={handleExportData}
+                                className="flex-1 border-2 border-blue-500 text-blue-600 font-semibold py-2.5 rounded-xl hover:bg-blue-50 transition flex justify-center items-center gap-2"
+                            >
+                                <i className="fa-solid fa-download"></i> 匯出備份
+                            </button>
+                            <label className="flex-1 border-2 border-indigo-500 text-indigo-600 font-semibold py-2.5 rounded-xl hover:bg-indigo-50 transition cursor-pointer flex justify-center items-center gap-2">
+                                <i className="fa-solid fa-upload"></i> 匯入還原
+                                <input type="file" accept=".json" className="hidden" onChange={handleImportData} />
+                            </label>
+                        </div>
                     </div>
 
                     {profile.tdee && (
@@ -547,6 +586,8 @@
         const ReportsTab = ({ foodLogs, weightLogs, profile }) => {
             const chartRef = useRef(null);
             const chartInstance = useRef(null);
+            const weightChartRef = useRef(null);
+            const weightChartInstance = useRef(null);
 
             // 取得近7天的日期字串
             const getLast7Days = () => {
@@ -568,15 +609,43 @@
                     .reduce((sum, log) => sum + log.calories, 0);
             });
 
-            // 計算當週平均體重
-            const currentWeekWeights = labels.map(date => {
-                const log = weightLogs.find(w => w.date === date);
-                return log ? log.weight : null;
-            }).filter(w => w !== null);
-            
-            const avgWeight = currentWeekWeights.length > 0 
-                ? (currentWeekWeights.reduce((a, b) => a + b, 0) / currentWeekWeights.length).toFixed(1) 
-                : '--';
+            // --- 新增：按週計算平均體重邏輯 ---
+            const getWeekMonday = (dateStr) => {
+                const d = new Date(dateStr);
+                const day = d.getDay();
+                const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+                const monday = new Date(d);
+                monday.setDate(diff);
+                return monday.toISOString().split('T')[0];
+            };
+
+            const weeklyWeightsMap = {};
+            weightLogs.forEach(log => {
+                const monday = getWeekMonday(log.date);
+                if (!weeklyWeightsMap[monday]) weeklyWeightsMap[monday] = [];
+                weeklyWeightsMap[monday].push(log.weight);
+            });
+
+            const sortedMondays = Object.keys(weeklyWeightsMap).sort();
+            const weightTrendLabels = [];
+            const weightTrendData = [];
+
+            sortedMondays.forEach(monday => {
+                const weights = weeklyWeightsMap[monday];
+                const avg = (weights.reduce((a, b) => a + b, 0) / weights.length).toFixed(1);
+                weightTrendLabels.push(`週一: ${monday.substring(5)}`);
+                weightTrendData.push(parseFloat(avg));
+            });
+
+            // 計算本週平均體重
+            const todayMonday = getWeekMonday(getTodayStr());
+            let currentWeekAvg = '--';
+            let currentWeekCount = 0;
+            if (weeklyWeightsMap[todayMonday]) {
+                const weights = weeklyWeightsMap[todayMonday];
+                currentWeekAvg = (weights.reduce((a, b) => a + b, 0) / weights.length).toFixed(1);
+                currentWeekCount = weights.length;
+            }
 
             // 月底回顧：比較本月最新體重與上個月底
             const currentMonthStr = getTodayStr().substring(0, 7); // YYYY-MM
@@ -598,9 +667,8 @@
             }
 
             useEffect(() => {
-                if (chartInstance.current) {
-                    chartInstance.current.destroy();
-                }
+                if (chartInstance.current) chartInstance.current.destroy();
+                if (weightChartInstance.current) weightChartInstance.current.destroy();
 
                 const ctx = chartRef.current.getContext('2d');
                 
@@ -635,21 +703,45 @@
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: {
-                            legend: { position: 'top', labels: { usePointStyle: true } },
-                            tooltip: { mode: 'index', intersect: false }
-                        },
-                        scales: {
-                            y: { beginAtZero: true, suggestedMax: (profile.target || 2000) * 1.5 },
-                            x: { grid: { display: false } }
-                        }
+                        plugins: { legend: { position: 'top', labels: { usePointStyle: true } }, tooltip: { mode: 'index', intersect: false } },
+                        scales: { y: { beginAtZero: true, suggestedMax: (profile.target || 2000) * 1.5 }, x: { grid: { display: false } } }
                     }
                 });
 
+                if (weightChartRef.current) {
+                    const ctxWeight = weightChartRef.current.getContext('2d');
+                    weightChartInstance.current = new Chart(ctxWeight, {
+                        type: 'line',
+                        data: {
+                            labels: weightTrendLabels,
+                            datasets: [{
+                                label: '當週平均體重 (kg)',
+                                data: weightTrendData,
+                                borderColor: '#3b82f6',
+                                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                                tension: 0.3,
+                                fill: true,
+                                pointBackgroundColor: '#3b82f6',
+                                pointBorderColor: '#fff',
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: { legend: { position: 'top', labels: { usePointStyle: true } }, tooltip: { mode: 'index', intersect: false } },
+                            scales: { 
+                                y: { beginAtZero: false, grace: '5%' }, 
+                                x: { grid: { display: false } } 
+                            }
+                        }
+                    });
+                }
+
                 return () => {
                     if (chartInstance.current) chartInstance.current.destroy();
+                    if (weightChartInstance.current) weightChartInstance.current.destroy();
                 };
-            }, [foodLogs, profile.target]);
+            }, [foodLogs, weightLogs, profile.target]);
 
             return (
                 <div className="space-y-6 animate-fade-in pb-20">
@@ -657,14 +749,14 @@
                         {/* 週報告卡片 */}
                         <div className="bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl shadow-md p-6 text-white relative overflow-hidden">
                             <i className="fa-solid fa-calendar-week absolute -right-4 -bottom-4 text-7xl opacity-20"></i>
-                            <h3 className="font-bold mb-1 opacity-90 relative z-10">當週回顧 (近7日)</h3>
-                            <p className="text-sm opacity-80 mb-4 relative z-10">平均體重</p>
+                            <h3 className="font-bold mb-1 opacity-90 relative z-10">本週平均體重</h3>
+                            <p className="text-sm opacity-80 mb-4 relative z-10">週一至週日結算</p>
                             <div className="flex items-baseline relative z-10">
-                                <span className="text-4xl font-bold">{avgWeight}</span>
+                                <span className="text-4xl font-bold">{currentWeekAvg}</span>
                                 <span className="ml-2 text-lg opacity-80">kg</span>
                             </div>
                             <p className="mt-4 text-sm bg-black bg-opacity-20 inline-block px-3 py-1 rounded-full relative z-10">
-                                紀錄天數: {currentWeekWeights.length} 天
+                                本週已紀錄: {currentWeekCount} 天
                             </p>
                         </div>
 
@@ -692,6 +784,14 @@
                             <p className="mt-4 text-sm bg-black bg-opacity-20 inline-block px-3 py-1 rounded-full relative z-10">
                                 每月1日請記得測量作為基準！
                             </p>
+                        </div>
+                    </div>
+
+                    {/* 歷週平均體重折線圖 (新增) */}
+                    <div className="bg-white rounded-2xl shadow-sm p-6">
+                        <h3 className="font-bold text-gray-800 mb-6"><i className="fa-solid fa-weight-scale text-blue-500 mr-2"></i>歷週平均體重變化</h3>
+                        <div className="relative h-72 w-full">
+                            <canvas ref={weightChartRef}></canvas>
                         </div>
                     </div>
 
