@@ -50,7 +50,7 @@
         // 呼叫 Gemini API 估算熱量
         const estimateCaloriesAPI = async (text, base64Image, customApiKey) => {
             const apiKey = customApiKey || ""; 
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
             
             const payload = {
                 contents: [{ role: "user", parts: [] }],
