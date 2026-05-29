@@ -53,7 +53,7 @@
         const estimateCaloriesAPI = async (text, base64Image, customApiKey) => {
             const apiKey = customApiKey || ""; 
             // 將模型名稱改回具備穩定免費額度的 gemini-2.5-flash
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
             
             const payload = {
                 contents: [{ role: "user", parts: [] }],
